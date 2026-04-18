@@ -2,18 +2,20 @@ name: clawos-traefik-demo
 
 services:
   traefik:
-    image: traefik:v3.4
+    image: traefik:v3.6.7
     container_name: clawos-traefik
     restart: unless-stopped
     command:
       - --configFile=/etc/traefik/traefik.yaml
+    environment:
+      DOCKER_API_VERSION: "1.40"
     ports:
       - "80:80"
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:8082:8082"
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik.yaml:/etc/traefik/traefik.yaml:ro
-      - ./dynamic:/etc/traefik/dynamic:ro
       - ./logs:/var/log/traefik
     networks:
       - clawos_public
@@ -24,6 +26,14 @@ services:
     restart: unless-stopped
     networks:
       - clawos_public
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.tenant-alpha.rule=PathPrefix(`/tenant/alpha`)
+      - traefik.http.routers.tenant-alpha.entrypoints=web
+      - traefik.http.routers.tenant-alpha.service=tenant-alpha-svc
+      - traefik.http.routers.tenant-alpha.middlewares=tenant-alpha-strip
+      - traefik.http.middlewares.tenant-alpha-strip.stripprefix.prefixes=/tenant/alpha
+      - traefik.http.services.tenant-alpha-svc.loadbalancer.server.port=80
 
   tenant_beta:
     image: traefik/whoami:v1.10.2
@@ -31,6 +41,14 @@ services:
     restart: unless-stopped
     networks:
       - clawos_public
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.tenant-beta.rule=PathPrefix(`/tenant/beta`)
+      - traefik.http.routers.tenant-beta.entrypoints=web
+      - traefik.http.routers.tenant-beta.service=tenant-beta-svc
+      - traefik.http.routers.tenant-beta.middlewares=tenant-beta-strip
+      - traefik.http.middlewares.tenant-beta-strip.stripprefix.prefixes=/tenant/beta
+      - traefik.http.services.tenant-beta-svc.loadbalancer.server.port=80
 
 networks:
   clawos_public:
