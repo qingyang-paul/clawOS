@@ -12,6 +12,8 @@ This demo does not include OpenClaw yet. It uses two mock tenant backends:
 
 - `core/traefik/compose.multitenant-demo.yaml`
 - `core/traefik/traefik.yaml`
+- `core/traefik/ws_echo_server.py`
+- `core/traefik/ws_echo_client.py`
 
 ## Start
 
@@ -36,6 +38,53 @@ curl -s http://<server_ip>/tenant/beta | head -n 20
 Expected behavior:
 - `/tenant/alpha` reaches the `tenant_alpha` backend.
 - `/tenant/beta` reaches the `tenant_beta` backend.
+
+## WebSocket long-connection test
+
+The compose demo includes a WebSocket echo backend:
+- Route: `/ws/echo`
+- Backend container: `clawos-ws-echo`
+- Backend port: `9000`
+
+Start or refresh services:
+
+```bash
+cd core/traefik
+docker compose -f compose.multitenant-demo.yaml up -d
+```
+
+Verify router is loaded:
+
+```bash
+curl -s http://localhost:18080/api/http/routers | jq '.[] | select(.name | contains("ws-echo")) | {name, rule, status}'
+```
+
+Run long-connection smoke test from your local machine:
+
+```bash
+python3 core/traefik/ws_echo_client.py \
+  --url ws://<server_ip>/ws/echo \
+  --count 30 \
+  --interval 2 \
+  --timeout 10
+```
+
+Expected behavior:
+- Handshake returns `101 Switching Protocols`.
+- All rounds print `echo_ok`.
+- No unexpected disconnect before close.
+
+Observe routing/access logs on cloud host:
+
+```bash
+cd core/traefik
+tail -f logs/access.log | jq -r '"\(.RequestPath) \(.RouterName) \(.ServiceName) \(.DownstreamStatus)"'
+```
+
+For WebSocket requests, you should see entries like:
+- `RequestPath=/ws/echo`
+- `RouterName=ws-echo@docker`
+- `ServiceName=ws-echo-svc@docker`
 
 ## Dashboard and monitoring
 
