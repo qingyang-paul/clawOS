@@ -1,0 +1,36 @@
+http:
+  routers:
+    tenant-alpha:
+      rule: PathPrefix(`/tenant/alpha`)
+      entryPoints:
+        - web
+      middlewares:
+        - tenant-alpha-strip
+      service: tenant-alpha-svc
+    tenant-beta:
+      rule: PathPrefix(`/tenant/beta`)
+      entryPoints:
+        - web
+      middlewares:
+        - tenant-beta-strip
+      service: tenant-beta-svc
+
+  middlewares:
+    tenant-alpha-strip:
+      stripPrefix:
+        prefixes:
+          - /tenant/alpha
+    tenant-beta-strip:
+      stripPrefix:
+        prefixes:
+          - /tenant/beta
+
+  services:
+    tenant-alpha-svc:
+      loadBalancer:
+        servers:
+          - url: http://clawos-tenant-alpha:80
+    tenant-beta-svc:
+      loadBalancer:
+        servers:
+          - url: http://clawos-tenant-beta:80

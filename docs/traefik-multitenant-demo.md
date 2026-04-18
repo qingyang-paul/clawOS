@@ -12,6 +12,7 @@ This demo does not include OpenClaw yet. It uses two mock tenant backends:
 
 - `core/traefik/compose.multitenant-demo.yaml`
 - `core/traefik/traefik.yaml`
+- `core/traefik/dynamic/tenants.yaml`
 
 ## Start
 
@@ -20,6 +21,9 @@ cd core/traefik
 mkdir -p logs
 docker compose -f compose.multitenant-demo.yaml up -d
 ```
+
+This demo uses Traefik `file` provider for tenant routes (instead of docker labels),
+which avoids docker API version compatibility issues on some cloud hosts.
 
 ## Verify routing from local machine
 
@@ -51,6 +55,12 @@ ssh -L 18080:127.0.0.1:8080 -L 18082:127.0.0.1:8082 <user>@<server_ip>
 Then open:
 - `http://localhost:18080/dashboard/`
 - `http://localhost:18082/metrics`
+
+You can also inspect loaded routers from dashboard API:
+
+```bash
+curl -s http://localhost:18080/api/http/routers | jq '.[] | {name, rule, status}'
+```
 
 ## Request-level routing trace
 
