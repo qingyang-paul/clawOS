@@ -4,6 +4,7 @@ CONTROL_PLANE_ENV_FILE ?= .tmp/control-plane.env
 CONTROL_PLANE_PID_FILE := .tmp/control-plane/control-plane.pid
 CONTROL_PLANE_LOG_FILE := .tmp/control-plane/control-plane.log
 CONTROL_PLANE_LAST_CREATE_FILE := .tmp/control-plane/last-create.json
+CONTROL_PLANE_API_BASE_URL ?= http://127.0.0.1:8080/control-plane
 TRAEFIK_COMPOSE_FILE ?= core/traefik/compose.multitenant-demo.yaml
 TRAEFIK_LOG_DIR ?= core/traefik/logs
 TRAEFIK_DASHBOARD_API_URL ?= http://127.0.0.1:8080
@@ -48,6 +49,10 @@ control-plane-up:
 			exit 1; \
 		fi; \
 	done; \
+	if [[ "$$CONTROL_PLANE_HOST" != "127.0.0.1" ]]; then \
+		echo "CONTROL_PLANE_HOST must be 127.0.0.1 to keep control plane hidden behind Traefik"; \
+		exit 1; \
+	fi; \
 	if [[ -f "$(CONTROL_PLANE_PID_FILE)" ]] && kill -0 "$$(cat "$(CONTROL_PLANE_PID_FILE)")" 2>/dev/null; then \
 		echo "control-plane already running (pid=$$(cat "$(CONTROL_PLANE_PID_FILE)"))"; \
 		exit 1; \
@@ -104,8 +109,10 @@ tenant-create-feishu:
 	@test -n "$(FEISHU_VERIFICATION_TOKEN)" || (echo "FEISHU_VERIFICATION_TOKEN is required"; exit 1)
 	@test -f "$(CONTROL_PLANE_ENV_FILE)" || (echo "missing env file: $(CONTROL_PLANE_ENV_FILE)"; exit 1)
 	@set -a; source "$(CONTROL_PLANE_ENV_FILE)"; set +a; \
+	base_url="$${CONTROL_PLANE_API_BASE_URL:-$(CONTROL_PLANE_API_BASE_URL)}"; \
+	base_url="$${base_url%/}"; \
 	payload="$$(python3 -c 'import json,sys; tenant_name, app_id, app_secret, token = sys.argv[1:]; print(json.dumps({"tenant_name": tenant_name, "channel_type": "feishu", "channel_config": {"FEISHU_APP_ID": app_id, "FEISHU_APP_SECRET": app_secret, "FEISHU_VERIFICATION_TOKEN": token}}))' "$(TENANT_NAME)" "$(FEISHU_APP_ID)" "$(FEISHU_APP_SECRET)" "$(FEISHU_VERIFICATION_TOKEN)")"; \
-	curl -sS -X POST "http://$$CONTROL_PLANE_HOST:$$CONTROL_PLANE_PORT/v1/tenants" \
+	curl -sS -X POST "$$base_url/v1/tenants" \
 		-H "Content-Type: application/json" \
 		-d "$$payload" | tee "$(CONTROL_PLANE_LAST_CREATE_FILE)"; \
 	echo ""

@@ -1,0 +1,22 @@
+http:
+  routers:
+    control-plane-router:
+      entryPoints:
+        - traefik
+      rule: PathPrefix(`/control-plane`)
+      priority: 100
+      middlewares:
+        - control-plane-strip-prefix
+      service: control-plane-service
+
+  middlewares:
+    control-plane-strip-prefix:
+      stripPrefix:
+        prefixes:
+          - /control-plane
+
+  services:
+    control-plane-service:
+      loadBalancer:
+        servers:
+          - url: http://host.docker.internal:18090

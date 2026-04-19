@@ -16,7 +16,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
       - ./logs:/var/log/traefik
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - clawos_public
 

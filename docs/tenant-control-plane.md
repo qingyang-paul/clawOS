@@ -5,6 +5,11 @@
 Provide a company-internal API to create tenant runtime instances.  
 Frontend only sends user/business fields; backend generates and owns runtime fields.
 
+Control plane exposure policy:
+
+- control plane binds `127.0.0.1` only
+- API calls go through Traefik route prefix `/control-plane`
+
 ## Request/Response Contract
 
 Endpoint:
@@ -102,12 +107,16 @@ make traefik-restart
 make traefik-down
 ```
 
+Control plane route is defined at:
+
+- `core/traefik/dynamic/control-plane.yaml`
+
 If you need raw CLI, run with explicit arguments (no defaults for required config):
 
 ```bash
 cd cli
 uv run clawos control-plane serve \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   --port 18090 \
   --project-root /path/to/clawOS \
   --registry-file /path/to/clawOS/.tmp/control-plane/tenant-registry.json \
@@ -129,6 +138,12 @@ Health check:
 curl -s http://127.0.0.1:18090/healthz
 ```
 
+Through Traefik:
+
+```bash
+curl -s http://127.0.0.1:8080/control-plane/healthz
+```
+
 ## Verify Tenant Creation End-to-End
 
 Goal:
@@ -148,6 +163,14 @@ make tenant-create-feishu \
   FEISHU_APP_SECRET="demo-app-secret" \
   FEISHU_VERIFICATION_TOKEN="demo-verify-token"
 ```
+
+`tenant-create-feishu` calls:
+
+- `${CONTROL_PLANE_API_BASE_URL}/v1/tenants`
+
+Default `CONTROL_PLANE_API_BASE_URL`:
+
+- `http://127.0.0.1:8080/control-plane`
 
 Take `tenant_id` from response (for example `tenant-0001`), then verify:
 
