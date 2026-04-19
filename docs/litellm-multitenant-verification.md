@@ -1,0 +1,58 @@
+# LiteLLM Multi-tenant Virtual Key Verification
+
+## Goal
+
+Verify:
+
+1. different tenants hold different LiteLLM virtual keys
+2. requests from tenant keys are forwarded through one LiteLLM relay
+3. records can be queried separately (`/key/info`, `/spend/logs`)
+
+## Commands
+
+Set a master key in current shell:
+
+```bash
+export LITELLM_MASTER_KEY="replace-with-strong-master-key"
+```
+
+Start verification stack:
+
+```bash
+make litellm-verify-up
+make litellm-verify-status
+```
+
+Run multi-tenant virtual-key verification:
+
+```bash
+make litellm-verify-run \
+  LITELLM_VERIFY_TENANT_A=tenant-0001 \
+  LITELLM_VERIFY_TENANT_B=tenant-0002
+```
+
+Expected output includes:
+
+- two different generated keys
+- successful requests for tenant A and tenant B
+- key-specific records from `/key/info`
+- spend log preview from `/spend/logs` (when available)
+
+Inspect runtime logs:
+
+```bash
+make litellm-verify-logs
+```
+
+Stop stack:
+
+```bash
+make litellm-verify-down
+```
+
+## Files
+
+- `core/litellm/compose.verification.yaml`
+- `core/litellm/config.yaml`
+- `core/litellm/mock_openai_server.py`
+- `core/litellm/verify_virtual_keys.py`

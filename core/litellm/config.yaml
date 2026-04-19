@@ -1,0 +1,9 @@
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: http://mock-openai:9001/v1
+      api_key: mock-upstream-key
+
+litellm_settings:
+  set_verbose: true

@@ -1,0 +1,38 @@
+name: clawos-litellm-verify
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.35.0
+    container_name: clawos-litellm-verify
+    restart: unless-stopped
+    command:
+      - --config
+      - /app/config.yaml
+      - --port
+      - "4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      - mock-openai
+    networks:
+      - litellm_verify
+
+  mock-openai:
+    image: python:3.12-alpine
+    container_name: clawos-mock-openai
+    restart: unless-stopped
+    command:
+      - python
+      - /app/mock_openai_server.py
+    volumes:
+      - ./mock_openai_server.py:/app/mock_openai_server.py:ro
+    networks:
+      - litellm_verify
+
+networks:
+  litellm_verify:
+    name: clawos_litellm_verify

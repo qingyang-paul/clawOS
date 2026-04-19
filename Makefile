@@ -8,8 +8,12 @@ CONTROL_PLANE_API_BASE_URL ?= http://127.0.0.1:8080/control-plane
 TRAEFIK_COMPOSE_FILE ?= core/traefik/compose.multitenant-demo.yaml
 TRAEFIK_LOG_DIR ?= core/traefik/logs
 TRAEFIK_DASHBOARD_API_URL ?= http://127.0.0.1:8080
+LITELLM_VERIFY_COMPOSE_FILE ?= core/litellm/compose.verification.yaml
+LITELLM_VERIFY_BASE_URL ?= http://127.0.0.1:4000
+LITELLM_VERIFY_TENANT_A ?= tenant-verify-a
+LITELLM_VERIFY_TENANT_B ?= tenant-verify-b
 
-.PHONY: traefik-up traefik-down traefik-restart traefik-status traefik-logs traefik-routes control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-verify
+.PHONY: traefik-up traefik-down traefik-restart traefik-status traefik-logs traefik-routes litellm-verify-up litellm-verify-down litellm-verify-status litellm-verify-logs litellm-verify-run control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-verify
 
 traefik-up:
 	@mkdir -p "$(TRAEFIK_LOG_DIR)"
@@ -33,6 +37,30 @@ traefik-logs:
 
 traefik-routes:
 	@curl -sS "$(TRAEFIK_DASHBOARD_API_URL)/api/http/routers" | python3 -c 'import json,sys; routers=json.load(sys.stdin); print("name\tstatus\tentryPoints\tservice\trule"); [print("{}\t{}\t{}\t{}\t{}".format(r.get("name", ""), r.get("status", ""), ",".join(r.get("entryPoints", []) or []), r.get("service", ""), r.get("rule", ""))) for r in routers]'
+
+litellm-verify-up:
+	@test -n "$(LITELLM_MASTER_KEY)" || (echo "LITELLM_MASTER_KEY is required"; exit 1)
+	@docker compose -f "$(LITELLM_VERIFY_COMPOSE_FILE)" up -d
+	@echo "litellm verify stack is up: $(LITELLM_VERIFY_COMPOSE_FILE)"
+
+litellm-verify-down:
+	@docker compose -f "$(LITELLM_VERIFY_COMPOSE_FILE)" down
+	@echo "litellm verify stack is down: $(LITELLM_VERIFY_COMPOSE_FILE)"
+
+litellm-verify-status:
+	@docker compose -f "$(LITELLM_VERIFY_COMPOSE_FILE)" ps
+
+litellm-verify-logs:
+	@docker compose -f "$(LITELLM_VERIFY_COMPOSE_FILE)" logs -f --tail=200
+
+litellm-verify-run:
+	@test -n "$(LITELLM_MASTER_KEY)" || (echo "LITELLM_MASTER_KEY is required"; exit 1)
+	@python3 core/litellm/verify_virtual_keys.py \
+		--base-url "$(LITELLM_VERIFY_BASE_URL)" \
+		--master-key "$(LITELLM_MASTER_KEY)" \
+		--tenant-a "$(LITELLM_VERIFY_TENANT_A)" \
+		--tenant-b "$(LITELLM_VERIFY_TENANT_B)" \
+		--sleep-seconds 1.5
 
 control-plane-up:
 	@mkdir -p .tmp/control-plane .tmp/uv-cache
