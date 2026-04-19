@@ -96,6 +96,7 @@ Useful commands:
 
 ```bash
 make traefik-status
+make traefik-routes
 make traefik-logs
 make traefik-restart
 make traefik-down

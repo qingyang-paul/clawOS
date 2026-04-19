@@ -6,8 +6,9 @@ CONTROL_PLANE_LOG_FILE := .tmp/control-plane/control-plane.log
 CONTROL_PLANE_LAST_CREATE_FILE := .tmp/control-plane/last-create.json
 TRAEFIK_COMPOSE_FILE ?= core/traefik/compose.multitenant-demo.yaml
 TRAEFIK_LOG_DIR ?= core/traefik/logs
+TRAEFIK_DASHBOARD_API_URL ?= http://127.0.0.1:8080
 
-.PHONY: traefik-up traefik-down traefik-restart traefik-status traefik-logs control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-verify
+.PHONY: traefik-up traefik-down traefik-restart traefik-status traefik-logs traefik-routes control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-verify
 
 traefik-up:
 	@mkdir -p "$(TRAEFIK_LOG_DIR)"
@@ -28,6 +29,9 @@ traefik-status:
 
 traefik-logs:
 	@docker compose -f "$(TRAEFIK_COMPOSE_FILE)" logs -f --tail=200
+
+traefik-routes:
+	@curl -sS "$(TRAEFIK_DASHBOARD_API_URL)/api/http/routers" | python3 -c 'import json,sys; routers=json.load(sys.stdin); print("name\tstatus\tentryPoints\tservice\trule"); [print("{}\t{}\t{}\t{}\t{}".format(r.get("name", ""), r.get("status", ""), ",".join(r.get("entryPoints", []) or []), r.get("service", ""), r.get("rule", ""))) for r in routers]'
 
 control-plane-up:
 	@mkdir -p .tmp/control-plane .tmp/uv-cache
