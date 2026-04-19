@@ -4,8 +4,30 @@ CONTROL_PLANE_ENV_FILE ?= .tmp/control-plane.env
 CONTROL_PLANE_PID_FILE := .tmp/control-plane/control-plane.pid
 CONTROL_PLANE_LOG_FILE := .tmp/control-plane/control-plane.log
 CONTROL_PLANE_LAST_CREATE_FILE := .tmp/control-plane/last-create.json
+TRAEFIK_COMPOSE_FILE ?= core/traefik/compose.multitenant-demo.yaml
+TRAEFIK_LOG_DIR ?= core/traefik/logs
 
-.PHONY: control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-verify
+.PHONY: traefik-up traefik-down traefik-restart traefik-status traefik-logs control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-verify
+
+traefik-up:
+	@mkdir -p "$(TRAEFIK_LOG_DIR)"
+	@docker compose -f "$(TRAEFIK_COMPOSE_FILE)" up -d
+	@echo "traefik stack is up: $(TRAEFIK_COMPOSE_FILE)"
+
+traefik-down:
+	@docker compose -f "$(TRAEFIK_COMPOSE_FILE)" down
+	@echo "traefik stack is down: $(TRAEFIK_COMPOSE_FILE)"
+
+traefik-restart:
+	@mkdir -p "$(TRAEFIK_LOG_DIR)"
+	@docker compose -f "$(TRAEFIK_COMPOSE_FILE)" up -d --force-recreate
+	@echo "traefik stack restarted: $(TRAEFIK_COMPOSE_FILE)"
+
+traefik-status:
+	@docker compose -f "$(TRAEFIK_COMPOSE_FILE)" ps
+
+traefik-logs:
+	@docker compose -f "$(TRAEFIK_COMPOSE_FILE)" logs -f --tail=200
 
 control-plane-up:
 	@mkdir -p .tmp/control-plane .tmp/uv-cache

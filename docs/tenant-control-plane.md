@@ -84,6 +84,23 @@ Stop service:
 make control-plane-down
 ```
 
+## Traefik Lifecycle (for cloud reboot recovery)
+
+After cloud server reboot, bring Traefik stack back first:
+
+```bash
+make traefik-up
+```
+
+Useful commands:
+
+```bash
+make traefik-status
+make traefik-logs
+make traefik-restart
+make traefik-down
+```
+
 If you need raw CLI, run with explicit arguments (no defaults for required config):
 
 ```bash
@@ -122,6 +139,8 @@ Goal:
 Create tenant:
 
 ```bash
+make traefik-up
+make control-plane-up
 make tenant-create-feishu \
   TENANT_NAME="acme-demo" \
   FEISHU_APP_ID="demo-app-id" \
