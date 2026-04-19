@@ -113,7 +113,7 @@ tenant-verify:
 	echo "[1] tenant container status"; \
 	docker ps --filter "name=clawos-$(TENANT_ID)" --format "table {{.Names}}\t{{.Status}}"; \
 	echo "[2] traefik router status"; \
-	curl -sS "$$TRAEFIK_DASHBOARD_API_URL/api/http/routers" | python3 -c 'import json,sys; tenant_id=sys.argv[1]; routers=json.load(sys.stdin); matched=[r for r in routers if tenant_id in str(r.get("name",""))]; print("\n".join(f"{r.get(\"name\")} status={r.get(\"status\")} rule={r.get(\"rule\")}" for r in matched)) if matched else (_ for _ in ()).throw(SystemExit(f"router for {tenant_id} not found"))' "$(TENANT_ID)"; \
+	curl -sS "$$TRAEFIK_DASHBOARD_API_URL/api/http/routers" | python3 -c 'import json,sys; tenant_id=sys.argv[1]; routers=json.load(sys.stdin); matched=[r for r in routers if tenant_id in str(r.get("name",""))]; (print("\n".join("{} status={} rule={}".format(r.get("name"), r.get("status"), r.get("rule")) for r in matched)) if matched else (_ for _ in ()).throw(SystemExit("router for {} not found".format(tenant_id))))' "$(TENANT_ID)"; \
 	echo "[3] route interaction via traefik"; \
 	code="$$(curl -sS -o .tmp/control-plane/tenant-route.out -w '%{http_code}' "http://127.0.0.1/tenant/$(TENANT_ID)")"; \
 	if [[ "$$code" != "200" ]]; then \
