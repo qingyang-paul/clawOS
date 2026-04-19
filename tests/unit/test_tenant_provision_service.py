@@ -1,0 +1,198 @@
+import logging
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+
+from clawos_cli.application.tenant_provision_dto import (
+    TenantProvisionPlatformConfig,
+    TenantProvisionRequest,
+)
+from clawos_cli.application.tenant_provision_service import TenantProvisionService
+from clawos_cli.domain.error_codes import ErrorCode
+from clawos_cli.domain.exceptions import ClawOSError
+from clawos_cli.infrastructure.tenant_key_provider import TenantKeyProvider
+from clawos_cli.infrastructure.tenant_registry_gateway import (
+    TenantProvisionJobRecord,
+    TenantRegistryGateway,
+    TenantRegistryRecord,
+)
+from clawos_cli.infrastructure.tenant_runtime_gateway import TenantRuntimeGateway, TenantRuntimeSpec
+from clawos_cli.infrastructure.traefik_gateway import TraefikGateway
+
+
+class FakeTenantRegistryGateway(TenantRegistryGateway):
+    def __init__(self, tenant_id: str) -> None:
+        self._tenant_id = tenant_id
+        self._tenants: dict[str, TenantRegistryRecord] = {}
+        self._jobs: dict[str, TenantProvisionJobRecord] = {}
+
+    def allocate_tenant_id(self) -> str:
+        return self._tenant_id
+
+    def insert_tenant(self, record: TenantRegistryRecord) -> None:
+        self._tenants[record.tenant_id] = record
+
+    def update_tenant_status(
+        self,
+        tenant_id: str,
+        status: str,
+        updated_at: datetime,
+        reason_code: str,
+    ) -> None:
+        existing = self._tenants[tenant_id]
+        self._tenants[tenant_id] = TenantRegistryRecord(
+            tenant_id=existing.tenant_id,
+            tenant_name=existing.tenant_name,
+            channel_type=existing.channel_type,
+            status=status,
+            route_prefix=existing.route_prefix,
+            image_tag=existing.image_tag,
+            created_at=existing.created_at,
+            updated_at=updated_at,
+            reason_code=reason_code,
+        )
+
+    def insert_job(self, record: TenantProvisionJobRecord) -> None:
+        self._jobs[record.job_id] = record
+
+    def update_job_status(
+        self,
+        job_id: str,
+        status: str,
+        updated_at: datetime,
+        reason_code: str,
+    ) -> None:
+        existing = self._jobs[job_id]
+        self._jobs[job_id] = TenantProvisionJobRecord(
+            job_id=existing.job_id,
+            tenant_id=existing.tenant_id,
+            status=status,
+            created_at=existing.created_at,
+            updated_at=updated_at,
+            reason_code=reason_code,
+        )
+
+    def get_tenant(self, tenant_id: str) -> TenantRegistryRecord:
+        return self._tenants[tenant_id]
+
+
+class FakeTenantRuntimeGateway(TenantRuntimeGateway):
+    def __init__(self) -> None:
+        self.last_runtime_spec: TenantRuntimeSpec | None = None
+        self.started_compose_file: Path | None = None
+
+    def write_tenant_files(self, tenants_root: Path, runtime_spec: TenantRuntimeSpec) -> Path:
+        self.last_runtime_spec = runtime_spec
+        tenant_dir = tenants_root / runtime_spec.tenant_id
+        tenant_dir.mkdir(parents=True, exist_ok=True)
+        compose_file = tenant_dir / "compose.yaml"
+        compose_file.write_text("services: {}\n", encoding="utf-8")
+        return compose_file
+
+    def start_tenant(self, compose_file: Path) -> None:
+        self.started_compose_file = compose_file
+
+
+class FakeTraefikGateway(TraefikGateway):
+    def __init__(self) -> None:
+        self.last_router_name: str | None = None
+
+    def wait_router_ready(self, router_name: str) -> None:
+        self.last_router_name = router_name
+
+
+class FakeTenantKeyProvider(TenantKeyProvider):
+    def issue_openai_api_key(self, tenant_id: str) -> str:
+        return f"vk-{tenant_id}"
+
+
+class TenantProvisionServiceTest(unittest.TestCase):
+    def test_provision_generates_backend_fields_and_marks_running(self) -> None:
+        requested_at = datetime(2026, 4, 19, 10, 0, 0, tzinfo=timezone.utc)
+        platform_config = TenantProvisionPlatformConfig(
+            image_tag="openclaw/lobster:1.4.2-alpine",
+            service_port=3000,
+            openai_api_base="https://api.openai.com/v1",
+            openai_api_key="platform-openai-key",
+            log_level="INFO",
+        )
+        registry = FakeTenantRegistryGateway(tenant_id="tenant-0001")
+        runtime = FakeTenantRuntimeGateway()
+        traefik = FakeTraefikGateway()
+        key_provider = FakeTenantKeyProvider()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = TenantProvisionService(
+                project_root=Path(tmpdir),
+                platform_config=platform_config,
+                tenant_registry_gateway=registry,
+                tenant_runtime_gateway=runtime,
+                traefik_gateway=traefik,
+                tenant_key_provider=key_provider,
+                logger=logging.getLogger("test"),
+            )
+            result = service.provision(
+                request=TenantProvisionRequest(
+                    tenant_name="Acme Corp",
+                    channel_type="feishu",
+                    channel_config={
+                        "FEISHU_APP_ID": "app-id",
+                        "FEISHU_APP_SECRET": "app-secret",
+                        "FEISHU_VERIFICATION_TOKEN": "verify-token",
+                    },
+                    requested_at=requested_at,
+                )
+            )
+
+        self.assertEqual(result.tenant_id, "tenant-0001")
+        self.assertEqual(result.route_prefix, "/tenant/tenant-0001")
+        self.assertEqual(result.image_tag, "openclaw/lobster:1.4.2-alpine")
+        self.assertEqual(result.status, "RUNNING")
+        self.assertEqual(traefik.last_router_name, "tenant-0001")
+        self.assertIsNotNone(runtime.last_runtime_spec)
+        assert runtime.last_runtime_spec is not None
+        self.assertEqual(runtime.last_runtime_spec.openai_api_key, "vk-tenant-0001")
+        self.assertEqual(runtime.last_runtime_spec.service_port, 3000)
+        self.assertEqual(runtime.last_runtime_spec.route_prefix, "/tenant/tenant-0001")
+        tenant_record = registry.get_tenant(tenant_id="tenant-0001")
+        self.assertEqual(tenant_record.status, "RUNNING")
+
+    def test_provision_fails_when_required_channel_config_is_missing(self) -> None:
+        platform_config = TenantProvisionPlatformConfig(
+            image_tag="openclaw/lobster:1.4.2-alpine",
+            service_port=3000,
+            openai_api_base="https://api.openai.com/v1",
+            openai_api_key="platform-openai-key",
+            log_level="INFO",
+        )
+        registry = FakeTenantRegistryGateway(tenant_id="tenant-0001")
+        runtime = FakeTenantRuntimeGateway()
+        traefik = FakeTraefikGateway()
+        key_provider = FakeTenantKeyProvider()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = TenantProvisionService(
+                project_root=Path(tmpdir),
+                platform_config=platform_config,
+                tenant_registry_gateway=registry,
+                tenant_runtime_gateway=runtime,
+                traefik_gateway=traefik,
+                tenant_key_provider=key_provider,
+                logger=logging.getLogger("test"),
+            )
+            with self.assertRaises(ClawOSError) as context:
+                service.provision(
+                    request=TenantProvisionRequest(
+                        tenant_name="Acme Corp",
+                        channel_type="feishu",
+                        channel_config={
+                            "FEISHU_APP_ID": "app-id",
+                            "FEISHU_APP_SECRET": "app-secret",
+                        },
+                        requested_at=datetime.now(tz=timezone.utc),
+                    )
+                )
+        self.assertEqual(context.exception.code, ErrorCode.MISSING_ENV_KEY)
+
+
+if __name__ == "__main__":
+    unittest.main()

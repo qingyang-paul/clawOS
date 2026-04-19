@@ -1,0 +1,13 @@
+[project]
+name = "clawos-cli"
+version = "0.1.0"
+description = "clawOS command line interface"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+clawos = "clawos_cli.interfaces.cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
