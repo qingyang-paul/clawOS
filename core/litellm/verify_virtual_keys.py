@@ -3,6 +3,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 from typing import Any
 
 
@@ -22,6 +23,16 @@ def _call_json(method: str, url: str, body: dict[str, Any] | None, bearer_token:
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             payload = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        error_body = ""
+        try:
+            if exc.fp is not None:
+                error_body = exc.fp.read().decode("utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            error_body = ""
+        raise HttpCallError(
+            f"{method} {url} failed: status={exc.code} reason={exc.reason} body={error_body}"
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         raise HttpCallError(f"{method} {url} failed: {exc}") from exc
     try:

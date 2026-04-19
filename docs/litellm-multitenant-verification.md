@@ -13,8 +13,13 @@ Verify:
 Set a master key in current shell:
 
 ```bash
-export LITELLM_MASTER_KEY="replace-with-strong-master-key"
+export LITELLM_MASTER_KEY="sk-verify-strong-master-key"
 ```
+
+Requirements:
+
+- `LITELLM_MASTER_KEY` must start with `sk-`
+- virtual key management needs database; verification compose starts an internal postgres automatically
 
 Start verification stack:
 

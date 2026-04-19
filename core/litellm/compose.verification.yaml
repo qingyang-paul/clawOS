@@ -12,12 +12,15 @@ services:
       - "4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgresql://litellm:litellm@litellm-postgres:5432/litellm
+      LITELLM_SALT_KEY: litellm-verify-salt-key-2026-very-long
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     depends_on:
       - mock-openai
+      - litellm-postgres
     networks:
       - litellm_verify
 
@@ -33,6 +36,27 @@ services:
     networks:
       - litellm_verify
 
+  litellm-postgres:
+    image: postgres:16-alpine
+    container_name: clawos-litellm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - litellm_verify_pg:/var/lib/postgresql/data
+    networks:
+      - litellm_verify
+
 networks:
   litellm_verify:
     name: clawos_litellm_verify
+
+volumes:
+  litellm_verify_pg:

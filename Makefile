@@ -40,6 +40,7 @@ traefik-routes:
 
 litellm-verify-up:
 	@test -n "$(LITELLM_MASTER_KEY)" || (echo "LITELLM_MASTER_KEY is required"; exit 1)
+	@[[ "$(LITELLM_MASTER_KEY)" == sk-* ]] || (echo "LITELLM_MASTER_KEY must start with sk-"; exit 1)
 	@docker compose -f "$(LITELLM_VERIFY_COMPOSE_FILE)" up -d
 	@echo "litellm verify stack is up: $(LITELLM_VERIFY_COMPOSE_FILE)"
 
@@ -55,6 +56,7 @@ litellm-verify-logs:
 
 litellm-verify-run:
 	@test -n "$(LITELLM_MASTER_KEY)" || (echo "LITELLM_MASTER_KEY is required"; exit 1)
+	@[[ "$(LITELLM_MASTER_KEY)" == sk-* ]] || (echo "LITELLM_MASTER_KEY must start with sk-"; exit 1)
 	@python3 core/litellm/verify_virtual_keys.py \
 		--base-url "$(LITELLM_VERIFY_BASE_URL)" \
 		--master-key "$(LITELLM_MASTER_KEY)" \
