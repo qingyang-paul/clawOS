@@ -41,7 +41,12 @@ Expected output includes:
 - two different generated keys
 - successful requests for tenant A and tenant B
 - key-specific records from `/key/info`
-- spend log preview from `/spend/logs` (when available)
+- spend log preview from `/spend/logs` (when endpoint is healthy)
+
+Note:
+
+- LiteLLM `main-v1.35.0` may return 500 on `/spend/logs` for some setups.
+- In that case, verification still passes using key-level isolation (`/key/info`) and successful per-key requests.
 
 Inspect runtime logs:
 

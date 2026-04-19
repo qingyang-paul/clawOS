@@ -8,7 +8,10 @@ from typing import Any
 
 
 class HttpCallError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None, body: str = "") -> None:
+        self.status_code = status_code
+        self.body = body
+        super().__init__(message)
 
 
 def _call_json(method: str, url: str, body: dict[str, Any] | None, bearer_token: str) -> dict[str, Any] | list[Any]:
@@ -31,7 +34,9 @@ def _call_json(method: str, url: str, body: dict[str, Any] | None, bearer_token:
         except Exception:  # noqa: BLE001
             error_body = ""
         raise HttpCallError(
-            f"{method} {url} failed: status={exc.code} reason={exc.reason} body={error_body}"
+            f"{method} {url} failed: status={exc.code} reason={exc.reason} body={error_body}",
+            status_code=exc.code,
+            body=error_body,
         ) from exc
     except Exception as exc:  # noqa: BLE001
         raise HttpCallError(f"{method} {url} failed: {exc}") from exc
@@ -117,6 +122,7 @@ def main() -> int:
     parser.add_argument("--tenant-a", required=True)
     parser.add_argument("--tenant-b", required=True)
     parser.add_argument("--sleep-seconds", required=True, type=float)
+    parser.add_argument("--strict-spend-logs", action="store_true")
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
@@ -139,11 +145,16 @@ def main() -> int:
     print("[info] /key/info tenant-a:", json.dumps(info_a, ensure_ascii=True))
     print("[info] /key/info tenant-b:", json.dumps(info_b, ensure_ascii=True))
 
-    spend_logs = _fetch_spend_logs(base_url=base_url, master_key=args.master_key)
-    print(f"[info] /spend/logs count={len(spend_logs)}")
-    if spend_logs:
-        preview = spend_logs[-5:]
-        print("[info] /spend/logs tail:", json.dumps(preview, ensure_ascii=True))
+    try:
+        spend_logs = _fetch_spend_logs(base_url=base_url, master_key=args.master_key)
+        print(f"[info] /spend/logs count={len(spend_logs)}")
+        if spend_logs:
+            preview = spend_logs[-5:]
+            print("[info] /spend/logs tail:", json.dumps(preview, ensure_ascii=True))
+    except HttpCallError as exc:
+        if args.strict_spend_logs:
+            raise
+        print(f"[warn] /spend/logs unavailable, continue with key-level verification: {exc}")
 
     print("[pass] virtual keys are independent and requests were forwarded through LiteLLM")
     return 0
