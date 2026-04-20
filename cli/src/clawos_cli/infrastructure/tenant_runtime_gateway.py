@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+import shutil
 
 from clawos_cli.domain.error_codes import ErrorCode
 from clawos_cli.domain.exceptions import ClawOSError
@@ -28,6 +29,18 @@ class TenantRuntimeGateway(ABC):
 
     @abstractmethod
     def start_tenant(self, compose_file: Path) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def stop_tenant(self, tenants_root: Path, tenant_id: str) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def remove_tenant_files(self, tenants_root: Path, tenant_id: str) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def read_tenant_env(self, tenants_root: Path, tenant_id: str) -> dict[str, str]:
         raise NotImplementedError
 
 
@@ -110,3 +123,69 @@ class LocalTenantRuntimeGateway(TenantRuntimeGateway):
                 f"stderr={process.stderr.strip()}"
             ),
         )
+
+    def stop_tenant(self, tenants_root: Path, tenant_id: str) -> None:
+        compose_file = tenants_root / tenant_id / "compose.yaml"
+        if compose_file.exists():
+            command = [
+                "docker",
+                "compose",
+                "-f",
+                str(compose_file),
+                "down",
+                "--remove-orphans",
+            ]
+            process = subprocess.run(
+                command,
+                cwd=compose_file.parent,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if process.returncode == 0:
+                return
+        fallback_command = [
+            "docker",
+            "container",
+            "rm",
+            "-f",
+            f"clawos-{tenant_id}",
+        ]
+        fallback_process = subprocess.run(
+            fallback_command,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if fallback_process.returncode == 0:
+            return
+        stderr = fallback_process.stderr.strip()
+        if "No such container" in stderr:
+            return
+        raise ClawOSError(
+            code=ErrorCode.CONTAINER_STOP_FAILED,
+            message=(
+                "failed to stop tenant container; "
+                f"stderr={stderr}"
+            ),
+        )
+
+    def remove_tenant_files(self, tenants_root: Path, tenant_id: str) -> None:
+        tenant_directory = tenants_root / tenant_id
+        if tenant_directory.exists():
+            shutil.rmtree(tenant_directory)
+
+    def read_tenant_env(self, tenants_root: Path, tenant_id: str) -> dict[str, str]:
+        env_file = tenants_root / tenant_id / ".env"
+        if not env_file.exists():
+            return {}
+        entries: dict[str, str] = {}
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if raw == "" or raw.startswith("#"):
+                continue
+            if "=" not in raw:
+                continue
+            key, value = raw.split("=", 1)
+            entries[key] = value
+        return entries

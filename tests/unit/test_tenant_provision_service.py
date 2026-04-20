@@ -19,6 +19,11 @@ from clawos_cli.infrastructure.tenant_registry_gateway import (
 )
 from clawos_cli.infrastructure.tenant_runtime_gateway import TenantRuntimeGateway, TenantRuntimeSpec
 from clawos_cli.infrastructure.traefik_gateway import TraefikGateway
+from clawos_cli.infrastructure.user_wallet_gateway import (
+    UserBalanceRecord,
+    UserLedgerRecord,
+    UserWalletGateway,
+)
 
 
 class FakeTenantRegistryGateway(TenantRegistryGateway):
@@ -93,6 +98,19 @@ class FakeTenantRuntimeGateway(TenantRuntimeGateway):
     def start_tenant(self, compose_file: Path) -> None:
         self.started_compose_file = compose_file
 
+    def stop_tenant(self, tenants_root: Path, tenant_id: str) -> None:
+        _ = tenants_root
+        _ = tenant_id
+
+    def remove_tenant_files(self, tenants_root: Path, tenant_id: str) -> None:
+        _ = tenants_root
+        _ = tenant_id
+
+    def read_tenant_env(self, tenants_root: Path, tenant_id: str) -> dict[str, str]:
+        _ = tenants_root
+        _ = tenant_id
+        return {"OPENAI_API_KEY": "fake-key"}
+
 
 class FakeTraefikGateway(TraefikGateway):
     def __init__(self) -> None:
@@ -101,10 +119,106 @@ class FakeTraefikGateway(TraefikGateway):
     def wait_router_ready(self, router_name: str) -> None:
         self.last_router_name = router_name
 
+    def wait_router_removed(self, router_name: str) -> None:
+        _ = router_name
+
 
 class FakeTenantKeyProvider(TenantKeyProvider):
     def issue_openai_api_key(self, tenant_id: str) -> str:
         return f"vk-{tenant_id}"
+
+    def revoke_openai_api_key(self, tenant_id: str, api_key: str) -> None:
+        _ = tenant_id
+        _ = api_key
+
+
+class FakeUserWalletGateway(UserWalletGateway):
+    def get_user_balance(self, tenant_id: str, user_id: str) -> UserBalanceRecord:
+        return UserBalanceRecord(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            balance="0.000000",
+            currency="USD",
+            updated_at=datetime.now(tz=timezone.utc),
+        )
+
+    def topup(
+        self,
+        tenant_id: str,
+        user_id: str,
+        amount: str,
+        currency: str,
+        source: str,
+        source_ref: str,
+        request_id: str,
+        idempotency_key: str,
+        metadata: dict[str, str],
+        occurred_at: datetime,
+        created_at: datetime,
+    ) -> UserLedgerRecord:
+        _ = amount
+        _ = source
+        _ = source_ref
+        _ = request_id
+        _ = idempotency_key
+        _ = metadata
+        _ = occurred_at
+        return UserLedgerRecord(
+            ledger_id=1,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            event_type="topup",
+            delta="1.000000",
+            balance_after="1.000000",
+            currency=currency,
+            source="manual",
+            source_ref="test",
+            request_id="req",
+            idempotency_key="idem",
+            metadata={},
+            occurred_at=created_at,
+            created_at=created_at,
+            idempotent_replay=False,
+        )
+
+    def charge(
+        self,
+        tenant_id: str,
+        user_id: str,
+        amount: str,
+        currency: str,
+        source: str,
+        source_ref: str,
+        request_id: str,
+        idempotency_key: str,
+        metadata: dict[str, str],
+        occurred_at: datetime,
+        created_at: datetime,
+    ) -> UserLedgerRecord:
+        _ = amount
+        _ = source
+        _ = source_ref
+        _ = request_id
+        _ = idempotency_key
+        _ = metadata
+        _ = occurred_at
+        return UserLedgerRecord(
+            ledger_id=2,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            event_type="llm_usage",
+            delta="-1.000000",
+            balance_after="0.000000",
+            currency=currency,
+            source="manual",
+            source_ref="test",
+            request_id="req",
+            idempotency_key="idem",
+            metadata={},
+            occurred_at=created_at,
+            created_at=created_at,
+            idempotent_replay=False,
+        )
 
 
 class TenantProvisionServiceTest(unittest.TestCase):
@@ -121,6 +235,7 @@ class TenantProvisionServiceTest(unittest.TestCase):
         runtime = FakeTenantRuntimeGateway()
         traefik = FakeTraefikGateway()
         key_provider = FakeTenantKeyProvider()
+        wallet_gateway = FakeUserWalletGateway()
         with tempfile.TemporaryDirectory() as tmpdir:
             service = TenantProvisionService(
                 project_root=Path(tmpdir),
@@ -129,6 +244,7 @@ class TenantProvisionServiceTest(unittest.TestCase):
                 tenant_runtime_gateway=runtime,
                 traefik_gateway=traefik,
                 tenant_key_provider=key_provider,
+                user_wallet_gateway=wallet_gateway,
                 logger=logging.getLogger("test"),
             )
             result = service.provision(
@@ -169,6 +285,7 @@ class TenantProvisionServiceTest(unittest.TestCase):
         runtime = FakeTenantRuntimeGateway()
         traefik = FakeTraefikGateway()
         key_provider = FakeTenantKeyProvider()
+        wallet_gateway = FakeUserWalletGateway()
         with tempfile.TemporaryDirectory() as tmpdir:
             service = TenantProvisionService(
                 project_root=Path(tmpdir),
@@ -177,6 +294,7 @@ class TenantProvisionServiceTest(unittest.TestCase):
                 tenant_runtime_gateway=runtime,
                 traefik_gateway=traefik,
                 tenant_key_provider=key_provider,
+                user_wallet_gateway=wallet_gateway,
                 logger=logging.getLogger("test"),
             )
             with self.assertRaises(ClawOSError) as context:

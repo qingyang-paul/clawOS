@@ -9,13 +9,15 @@ from clawos_cli.application.dto import BackupRequest, RestoreRequest
 from clawos_cli.application.restore_service import RestoreService
 from clawos_cli.application.tenant_provision_dto import TenantProvisionPlatformConfig
 from clawos_cli.application.tenant_provision_service import TenantProvisionService
+from clawos_cli.domain.error_codes import ErrorCode
 from clawos_cli.domain.exceptions import ClawOSError
 from clawos_cli.infrastructure.filesystem_gateway import LocalFilesystemGateway
 from clawos_cli.infrastructure.postgres_gateway import SkeletonPostgresGateway
-from clawos_cli.infrastructure.tenant_key_provider import SkeletonTenantKeyProvider
+from clawos_cli.infrastructure.tenant_key_provider import LiteLLMTenantKeyProvider, SkeletonTenantKeyProvider
 from clawos_cli.infrastructure.tenant_registry_gateway import JsonTenantRegistryGateway
 from clawos_cli.infrastructure.tenant_runtime_gateway import LocalTenantRuntimeGateway
 from clawos_cli.infrastructure.traefik_gateway import HttpTraefikGateway
+from clawos_cli.infrastructure.user_wallet_gateway import JsonUserWalletGateway
 from clawos_cli.interfaces.http.tenant_control_plane import serve_tenant_control_plane
 
 
@@ -34,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_serve_parser.add_argument("--port", required=True, type=int)
     control_plane_serve_parser.add_argument("--project-root", required=True)
     control_plane_serve_parser.add_argument("--registry-file", required=True)
+    control_plane_serve_parser.add_argument("--wallet-file", required=True)
     control_plane_serve_parser.add_argument("--traefik-dashboard-api-url", required=True)
     control_plane_serve_parser.add_argument("--traefik-max-wait-seconds", required=True, type=float)
     control_plane_serve_parser.add_argument("--traefik-poll-interval-seconds", required=True, type=float)
@@ -42,8 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_serve_parser.add_argument("--platform-openai-api-base", required=True)
     control_plane_serve_parser.add_argument("--platform-openai-api-key", required=True)
     control_plane_serve_parser.add_argument("--platform-log-level", required=True)
-    control_plane_serve_parser.add_argument("--tenant-key-prefix", required=True)
-    control_plane_serve_parser.add_argument("--tenant-key-entropy-bytes", required=True, type=int)
+    control_plane_serve_parser.add_argument("--tenant-key-provider", required=True, choices=("skeleton", "litellm"))
+    control_plane_serve_parser.add_argument("--tenant-key-prefix")
+    control_plane_serve_parser.add_argument("--tenant-key-entropy-bytes", type=int)
+    control_plane_serve_parser.add_argument("--litellm-base-url")
+    control_plane_serve_parser.add_argument("--litellm-master-key")
+    control_plane_serve_parser.add_argument("--litellm-model-name")
+    control_plane_serve_parser.add_argument("--litellm-timeout-seconds", type=float)
     return parser
 
 
@@ -102,16 +110,40 @@ def handle_control_plane_serve(args: argparse.Namespace, logger: logging.Logger)
         log_level=args.platform_log_level,
     )
     tenant_registry_gateway = JsonTenantRegistryGateway(registry_file=Path(args.registry_file))
+    user_wallet_gateway = JsonUserWalletGateway(wallet_file=Path(args.wallet_file))
     tenant_runtime_gateway = LocalTenantRuntimeGateway()
     traefik_gateway = HttpTraefikGateway(
         dashboard_api_url=args.traefik_dashboard_api_url,
         max_wait_seconds=args.traefik_max_wait_seconds,
         poll_interval_seconds=args.traefik_poll_interval_seconds,
     )
-    tenant_key_provider = SkeletonTenantKeyProvider(
-        key_prefix=args.tenant_key_prefix,
-        entropy_bytes=args.tenant_key_entropy_bytes,
-    )
+    if args.tenant_key_provider == "skeleton":
+        if args.tenant_key_prefix is None or args.tenant_key_entropy_bytes is None:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message="tenant-key-prefix and tenant-key-entropy-bytes are required for skeleton provider",
+            )
+        tenant_key_provider = SkeletonTenantKeyProvider(
+            key_prefix=args.tenant_key_prefix,
+            entropy_bytes=args.tenant_key_entropy_bytes,
+        )
+    else:
+        if args.litellm_base_url is None or args.litellm_master_key is None:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message="litellm-base-url and litellm-master-key are required for litellm provider",
+            )
+        if args.litellm_model_name is None or args.litellm_timeout_seconds is None:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message="litellm-model-name and litellm-timeout-seconds are required for litellm provider",
+            )
+        tenant_key_provider = LiteLLMTenantKeyProvider(
+            base_url=args.litellm_base_url,
+            master_key=args.litellm_master_key,
+            model_name=args.litellm_model_name,
+            request_timeout_seconds=args.litellm_timeout_seconds,
+        )
     tenant_provision_service = TenantProvisionService(
         project_root=project_root,
         platform_config=platform_config,
@@ -119,6 +151,7 @@ def handle_control_plane_serve(args: argparse.Namespace, logger: logging.Logger)
         tenant_runtime_gateway=tenant_runtime_gateway,
         traefik_gateway=traefik_gateway,
         tenant_key_provider=tenant_key_provider,
+        user_wallet_gateway=user_wallet_gateway,
         logger=logger,
     )
     serve_tenant_control_plane(

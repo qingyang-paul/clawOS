@@ -42,6 +42,28 @@ CREATE TABLE IF NOT EXISTS tenant_provision_job (
 CREATE INDEX IF NOT EXISTS idx_tenant_provision_job_tenant_id_created_at
     ON tenant_provision_job (tenant_id, created_at);
 
+CREATE TABLE IF NOT EXISTS tenant_channel_feishu (
+    tenant_id VARCHAR(64) PRIMARY KEY REFERENCES tenant(id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL,
+    app_secret TEXT NOT NULL,
+    verification_token TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tenant_virtual_key (
+    tenant_id VARCHAR(64) PRIMARY KEY REFERENCES tenant(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    key_alias TEXT NOT NULL,
+    virtual_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_virtual_key_provider_status_updated_at
+    ON tenant_virtual_key (provider, status, updated_at);
+
 CREATE TABLE IF NOT EXISTS user_balance (
     tenant_id VARCHAR(64) NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
     user_id VARCHAR(128) NOT NULL,

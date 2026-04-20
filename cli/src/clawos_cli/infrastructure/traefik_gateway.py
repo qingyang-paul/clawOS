@@ -13,6 +13,10 @@ class TraefikGateway(ABC):
     def wait_router_ready(self, router_name: str) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def wait_router_removed(self, router_name: str) -> None:
+        raise NotImplementedError
+
 
 class HttpTraefikGateway(TraefikGateway):
     def __init__(self, dashboard_api_url: str, max_wait_seconds: float, poll_interval_seconds: float) -> None:
@@ -24,15 +28,25 @@ class HttpTraefikGateway(TraefikGateway):
         started_at = time.time()
         while time.time() - started_at <= self._max_wait_seconds:
             routers = self._fetch_routers()
-            for router in routers:
-                name = str(router.get("name", ""))
-                if name == f"{router_name}@docker" or name == router_name:
-                    return
+            if self._is_router_present(routers=routers, router_name=router_name):
+                return
             time.sleep(self._poll_interval_seconds)
 
         raise ClawOSError(
             code=ErrorCode.TRAEFIK_ROUTER_NOT_READY,
             message=f"traefik router is not ready in time: {router_name}",
+        )
+
+    def wait_router_removed(self, router_name: str) -> None:
+        started_at = time.time()
+        while time.time() - started_at <= self._max_wait_seconds:
+            routers = self._fetch_routers()
+            if not self._is_router_present(routers=routers, router_name=router_name):
+                return
+            time.sleep(self._poll_interval_seconds)
+        raise ClawOSError(
+            code=ErrorCode.TRAEFIK_ROUTER_NOT_REMOVED,
+            message=f"traefik router is still active after timeout: {router_name}",
         )
 
     def _fetch_routers(self) -> list[dict[str, object]]:
@@ -52,3 +66,10 @@ class HttpTraefikGateway(TraefikGateway):
                 message="invalid traefik dashboard response: expected list",
             )
         return raw
+
+    def _is_router_present(self, routers: list[dict[str, object]], router_name: str) -> bool:
+        for router in routers:
+            name = str(router.get("name", ""))
+            if name in (f"{router_name}@docker", router_name):
+                return True
+        return False
