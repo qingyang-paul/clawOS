@@ -1,8 +1,7 @@
 SHELL := /bin/bash
 
 CONTROL_PLANE_ENV_FILE ?= .tmp/control-plane.env
-CONTROL_PLANE_PID_FILE := .tmp/control-plane/control-plane.pid
-CONTROL_PLANE_LOG_FILE := .tmp/control-plane/control-plane.log
+CONTROL_PLANE_COMPOSE_FILE ?= core/control-plane/compose.yaml
 CONTROL_PLANE_LAST_CREATE_FILE := .tmp/control-plane/last-create.json
 CONTROL_PLANE_LAST_DELETE_FILE := .tmp/control-plane/last-delete.json
 CONTROL_PLANE_API_BASE_URL ?= http://127.0.0.1:8080/control-plane
@@ -42,6 +41,7 @@ traefik-routes:
 litellm-verify-up:
 	@test -n "$(LITELLM_MASTER_KEY)" || (echo "LITELLM_MASTER_KEY is required"; exit 1)
 	@[[ "$(LITELLM_MASTER_KEY)" == sk-* ]] || (echo "LITELLM_MASTER_KEY must start with sk-"; exit 1)
+	@docker network inspect clawos_public >/dev/null 2>&1 || docker network create clawos_public >/dev/null
 	@docker compose -f "$(LITELLM_VERIFY_COMPOSE_FILE)" up -d
 	@echo "litellm verify stack is up: $(LITELLM_VERIFY_COMPOSE_FILE)"
 
@@ -70,7 +70,7 @@ control-plane-up:
 	@test -f "$(CONTROL_PLANE_ENV_FILE)" || (echo "missing env file: $(CONTROL_PLANE_ENV_FILE). copy docs/tenant-control-plane.env.example first"; exit 1)
 	@set -a; source "$(CONTROL_PLANE_ENV_FILE)"; set +a; \
 	for key in \
-		CONTROL_PLANE_HOST CONTROL_PLANE_PORT PROJECT_ROOT REGISTRY_FILE WALLET_FILE \
+		CONTROL_PLANE_PORT CONTROL_PLANE_API_BASE_URL \
 		TRAEFIK_DASHBOARD_API_URL TRAEFIK_MAX_WAIT_SECONDS TRAEFIK_POLL_INTERVAL_SECONDS \
 		PLATFORM_IMAGE_TAG PLATFORM_SERVICE_PORT PLATFORM_OPENAI_API_BASE PLATFORM_OPENAI_API_KEY PLATFORM_LOG_LEVEL \
 		TENANT_KEY_PROVIDER LITELLM_AUTO_CHARGE_ENABLED; do \
@@ -113,69 +113,22 @@ control-plane-up:
 			fi; \
 		done; \
 	fi; \
-	if [[ "$$CONTROL_PLANE_HOST" != "127.0.0.1" ]]; then \
-		echo "CONTROL_PLANE_HOST must be 127.0.0.1 to keep control plane hidden behind Traefik"; \
+	if ! docker network inspect clawos_public >/dev/null 2>&1; then \
+		echo "docker network clawos_public not found. run make traefik-up first"; \
 		exit 1; \
 	fi; \
-	if [[ -f "$(CONTROL_PLANE_PID_FILE)" ]] && kill -0 "$$(cat "$(CONTROL_PLANE_PID_FILE)")" 2>/dev/null; then \
-		echo "control-plane already running (pid=$$(cat "$(CONTROL_PLANE_PID_FILE)"))"; \
-		exit 1; \
-	fi; \
-	cd "$$PROJECT_ROOT/cli"; \
-	UV_CACHE_DIR="$$PROJECT_ROOT/.tmp/uv-cache" \
-	PYTHONPATH="$$PROJECT_ROOT/cli/src" \
-	nohup uv run clawos control-plane serve \
-		--host "$$CONTROL_PLANE_HOST" \
-		--port "$$CONTROL_PLANE_PORT" \
-		--project-root "$$PROJECT_ROOT" \
-		--registry-file "$$REGISTRY_FILE" \
-		--wallet-file "$$WALLET_FILE" \
-		--traefik-dashboard-api-url "$$TRAEFIK_DASHBOARD_API_URL" \
-		--traefik-max-wait-seconds "$$TRAEFIK_MAX_WAIT_SECONDS" \
-		--traefik-poll-interval-seconds "$$TRAEFIK_POLL_INTERVAL_SECONDS" \
-		--platform-image-tag "$$PLATFORM_IMAGE_TAG" \
-		--platform-service-port "$$PLATFORM_SERVICE_PORT" \
-		--platform-openai-api-base "$$PLATFORM_OPENAI_API_BASE" \
-		--platform-openai-api-key "$$PLATFORM_OPENAI_API_KEY" \
-		--platform-log-level "$$PLATFORM_LOG_LEVEL" \
-		--tenant-key-provider "$$TENANT_KEY_PROVIDER" \
-		$${TENANT_KEY_PREFIX:+--tenant-key-prefix "$$TENANT_KEY_PREFIX"} \
-		$${TENANT_KEY_ENTROPY_BYTES:+--tenant-key-entropy-bytes "$$TENANT_KEY_ENTROPY_BYTES"} \
-		$${LITELLM_BASE_URL:+--litellm-base-url "$$LITELLM_BASE_URL"} \
-		$${LITELLM_MASTER_KEY:+--litellm-master-key "$$LITELLM_MASTER_KEY"} \
-		$${LITELLM_MODEL_NAME:+--litellm-model-name "$$LITELLM_MODEL_NAME"} \
-		$${LITELLM_TIMEOUT_SECONDS:+--litellm-timeout-seconds "$$LITELLM_TIMEOUT_SECONDS"} \
-		$${LITELLM_TOPUP_FX_RATES:+--litellm-topup-fx-rates "$$LITELLM_TOPUP_FX_RATES"} \
-		$${LITELLM_TOPUP_SYNC_STATE_FILE:+--litellm-topup-sync-state-file "$$LITELLM_TOPUP_SYNC_STATE_FILE"} \
-		--litellm-auto-charge-enabled "$$LITELLM_AUTO_CHARGE_ENABLED" \
-		$${LITELLM_AUTO_CHARGE_POLL_INTERVAL_SECONDS:+--litellm-auto-charge-poll-interval-seconds "$$LITELLM_AUTO_CHARGE_POLL_INTERVAL_SECONDS"} \
-		$${LITELLM_AUTO_CHARGE_STATE_FILE:+--litellm-auto-charge-state-file "$$LITELLM_AUTO_CHARGE_STATE_FILE"} \
-		>"$$PROJECT_ROOT/$(CONTROL_PLANE_LOG_FILE)" 2>&1 & echo $$! >"$$PROJECT_ROOT/$(CONTROL_PLANE_PID_FILE)"; \
-	echo "control-plane started: pid=$$(cat "$$PROJECT_ROOT/$(CONTROL_PLANE_PID_FILE)") log=$$PROJECT_ROOT/$(CONTROL_PLANE_LOG_FILE)"
+	docker compose -f "$(CONTROL_PLANE_COMPOSE_FILE)" up -d --build; \
+	echo "control-plane container is up: $(CONTROL_PLANE_COMPOSE_FILE)"
 
 control-plane-down:
-	@if [[ ! -f "$(CONTROL_PLANE_PID_FILE)" ]]; then \
-		echo "control-plane not running"; \
-		exit 0; \
-	fi
-	@pid="$$(cat "$(CONTROL_PLANE_PID_FILE)")"; \
-	if kill -0 "$$pid" 2>/dev/null; then \
-		kill "$$pid"; \
-		echo "control-plane stopped: pid=$$pid"; \
-	else \
-		echo "control-plane pid file exists but process not running: pid=$$pid"; \
-	fi; \
-	rm -f "$(CONTROL_PLANE_PID_FILE)"
+	@docker compose -f "$(CONTROL_PLANE_COMPOSE_FILE)" down
+	@echo "control-plane container is down: $(CONTROL_PLANE_COMPOSE_FILE)"
 
 control-plane-status:
-	@if [[ -f "$(CONTROL_PLANE_PID_FILE)" ]] && kill -0 "$$(cat "$(CONTROL_PLANE_PID_FILE)")" 2>/dev/null; then \
-		echo "running pid=$$(cat "$(CONTROL_PLANE_PID_FILE)")"; \
-	else \
-		echo "stopped"; \
-	fi
+	@docker compose -f "$(CONTROL_PLANE_COMPOSE_FILE)" ps
 
 control-plane-logs:
-	@tail -f "$(CONTROL_PLANE_LOG_FILE)"
+	@docker compose -f "$(CONTROL_PLANE_COMPOSE_FILE)" logs -f --tail=200
 
 tenant-create-feishu:
 	@test -n "$(TENANT_NAME)" || (echo "TENANT_NAME is required"; exit 1)

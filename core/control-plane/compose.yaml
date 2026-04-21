@@ -1,0 +1,25 @@
+name: clawos-control-plane
+
+services:
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: core/control-plane/Dockerfile
+    container_name: clawos-control-plane
+    restart: unless-stopped
+    env_file:
+      - ../../.tmp/control-plane.env
+    volumes:
+      - ../../:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:18090:18090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - clawos_public
+
+networks:
+  clawos_public:
+    external: true
+    name: clawos_public

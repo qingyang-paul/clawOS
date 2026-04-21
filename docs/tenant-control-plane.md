@@ -7,7 +7,7 @@ Frontend only sends user/business fields; backend generates and owns runtime fie
 
 Control plane exposure policy:
 
-- control plane binds `127.0.0.1` only
+- control plane runs as a container (`clawos-control-plane`) on network `clawos_public`
 - API calls go through Traefik route prefix `/control-plane`
 - Traefik dashboard and API are routed explicitly via `/dashboard` and `/api` (no `api.insecure` catch-all router)
 
@@ -17,6 +17,12 @@ Why `/control-plane` previously returned 404:
 - that catch-all can match `/control-plane/*` before your custom file router
 - result: request is handled by dashboard service, then returns plain `404 page not found`
 - fix: disable insecure mode and add explicit dashboard router in `core/traefik/dynamic/dashboard.yaml`
+
+Why tenant create returned `502 Bad Gateway`:
+
+- Traefik and control-plane were in different network contexts (host process vs container path)
+- container->host loopback path is fragile and easy to misconfigure
+- fix: run control-plane as container and route Traefik directly to `clawos-control-plane:18090`
 
 ## Request/Response Contract
 
@@ -157,37 +163,26 @@ Control plane route is defined at:
 If you need raw CLI, run with explicit arguments (no defaults for required config):
 
 ```bash
-cd cli
-uv run clawos control-plane serve \
-  --host 127.0.0.1 \
-  --port 18090 \
-  --project-root /path/to/clawOS \
-  --registry-file /path/to/clawOS/.tmp/control-plane/tenant-registry.json \
-  --wallet-file /path/to/clawOS/.tmp/control-plane/user-wallet.json \
-  --traefik-dashboard-api-url http://127.0.0.1:8080 \
-  --traefik-max-wait-seconds 30 \
-  --traefik-poll-interval-seconds 1 \
-  --platform-image-tag openclaw/lobster:1.4.2-alpine \
-  --platform-service-port 3000 \
-  --platform-openai-api-base https://api.openai.com/v1 \
-  --platform-openai-api-key <platform-key-placeholder> \
-  --platform-log-level INFO \
-  --tenant-key-provider skeleton \
-  --tenant-key-prefix vk_tenant_ \
-  --tenant-key-entropy-bytes 24 \
-  --litellm-auto-charge-enabled false
+make control-plane-up
 ```
 
 Health check:
 
 ```bash
-curl -s http://127.0.0.1:18090/healthz
+curl -s http://127.0.0.1:8080/control-plane/healthz
 ```
 
 Through Traefik:
 
 ```bash
 curl -s http://127.0.0.1:8080/control-plane/healthz
+```
+
+Direct mode (bypass Traefik):
+
+```bash
+# container still exposes localhost:18090 for local diagnostics
+curl -s http://127.0.0.1:18090/healthz
 ```
 
 ## Verify Tenant Creation End-to-End

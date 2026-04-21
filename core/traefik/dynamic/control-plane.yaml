@@ -19,4 +19,4 @@ http:
     control-plane-service:
       loadBalancer:
         servers:
-          - url: http://host.docker.internal:18090
+          - url: http://clawos-control-plane:18090

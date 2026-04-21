@@ -23,6 +23,7 @@ services:
       - litellm-postgres
     networks:
       - litellm_verify
+      - clawos_public
 
   mock-openai:
     image: python:3.12-alpine
@@ -57,6 +58,9 @@ services:
 networks:
   litellm_verify:
     name: clawos_litellm_verify
+  clawos_public:
+    external: true
+    name: clawos_public
 
 volumes:
   litellm_verify_pg:
