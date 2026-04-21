@@ -1,0 +1,8 @@
+http:
+  routers:
+    dashboard-router:
+      entryPoints:
+        - traefik
+      rule: PathPrefix(`/api`) || PathPrefix(`/dashboard`)
+      service: api@internal
+      priority: 100

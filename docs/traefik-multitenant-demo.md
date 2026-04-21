@@ -25,6 +25,7 @@ docker compose -f compose.multitenant-demo.yaml up -d
 
 This demo uses Traefik docker provider + container labels for tenant routes.
 Traefik is pinned to `v3.6.7`, and `DOCKER_API_VERSION=1.40` is set explicitly.
+Dashboard is exposed through an explicit dynamic router (`/dashboard` + `/api`) with `api.insecure=false`.
 
 ## Verify routing from local machine
 

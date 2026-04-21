@@ -9,6 +9,14 @@ Control plane exposure policy:
 
 - control plane binds `127.0.0.1` only
 - API calls go through Traefik route prefix `/control-plane`
+- Traefik dashboard and API are routed explicitly via `/dashboard` and `/api` (no `api.insecure` catch-all router)
+
+Why `/control-plane` previously returned 404:
+
+- when `api.insecure=true`, Traefik creates an internal catch-all dashboard router on port `8080`
+- that catch-all can match `/control-plane/*` before your custom file router
+- result: request is handled by dashboard service, then returns plain `404 page not found`
+- fix: disable insecure mode and add explicit dashboard router in `core/traefik/dynamic/dashboard.yaml`
 
 ## Request/Response Contract
 
