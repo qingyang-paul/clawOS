@@ -7,6 +7,7 @@ from pathlib import Path
 from clawos_cli.application.tenant_provision_dto import (
     TenantProvisionPlatformConfig,
     TenantProvisionRequest,
+    UserWalletMutationRequest,
 )
 from clawos_cli.application.tenant_provision_service import TenantProvisionService
 from clawos_cli.domain.error_codes import ErrorCode
@@ -124,6 +125,9 @@ class FakeTraefikGateway(TraefikGateway):
 
 
 class FakeTenantKeyProvider(TenantKeyProvider):
+    def provider_name(self) -> str:
+        return "skeleton"
+
     def issue_openai_api_key(self, tenant_id: str) -> str:
         return f"vk-{tenant_id}"
 
@@ -131,8 +135,40 @@ class FakeTenantKeyProvider(TenantKeyProvider):
         _ = tenant_id
         _ = api_key
 
+    def sync_topup_budget_usd(self, tenant_id: str, api_key: str, budget_delta_usd: str) -> None:
+        _ = tenant_id
+        _ = api_key
+        _ = budget_delta_usd
+
+
+class FakeLiteLLMTenantKeyProvider(TenantKeyProvider):
+    def __init__(self) -> None:
+        self.synced_calls: list[dict[str, str]] = []
+
+    def provider_name(self) -> str:
+        return "litellm"
+
+    def issue_openai_api_key(self, tenant_id: str) -> str:
+        return f"sk-{tenant_id}"
+
+    def revoke_openai_api_key(self, tenant_id: str, api_key: str) -> None:
+        _ = tenant_id
+        _ = api_key
+
+    def sync_topup_budget_usd(self, tenant_id: str, api_key: str, budget_delta_usd: str) -> None:
+        self.synced_calls.append(
+            {
+                "tenant_id": tenant_id,
+                "api_key": api_key,
+                "budget_delta_usd": budget_delta_usd,
+            }
+        )
+
 
 class FakeUserWalletGateway(UserWalletGateway):
+    def __init__(self) -> None:
+        self.last_topup_call: dict[str, str] | None = None
+
     def get_user_balance(self, tenant_id: str, user_id: str) -> UserBalanceRecord:
         return UserBalanceRecord(
             tenant_id=tenant_id,
@@ -156,6 +192,13 @@ class FakeUserWalletGateway(UserWalletGateway):
         occurred_at: datetime,
         created_at: datetime,
     ) -> UserLedgerRecord:
+        self.last_topup_call = {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "amount": amount,
+            "currency": currency,
+            "idempotency_key": idempotency_key,
+        }
         _ = amount
         _ = source
         _ = source_ref
@@ -245,6 +288,8 @@ class TenantProvisionServiceTest(unittest.TestCase):
                 traefik_gateway=traefik,
                 tenant_key_provider=key_provider,
                 user_wallet_gateway=wallet_gateway,
+                litellm_topup_fx_rates_to_usd={},
+                litellm_topup_sync_state_file=Path(tmpdir) / "litellm-topup-sync-state.json",
                 logger=logging.getLogger("test"),
             )
             result = service.provision(
@@ -295,6 +340,8 @@ class TenantProvisionServiceTest(unittest.TestCase):
                 traefik_gateway=traefik,
                 tenant_key_provider=key_provider,
                 user_wallet_gateway=wallet_gateway,
+                litellm_topup_fx_rates_to_usd={},
+                litellm_topup_sync_state_file=Path(tmpdir) / "litellm-topup-sync-state.json",
                 logger=logging.getLogger("test"),
             )
             with self.assertRaises(ClawOSError) as context:
@@ -310,6 +357,68 @@ class TenantProvisionServiceTest(unittest.TestCase):
                     )
                 )
         self.assertEqual(context.exception.code, ErrorCode.MISSING_ENV_KEY)
+
+    def test_topup_converts_to_usd_and_syncs_litellm_budget(self) -> None:
+        requested_at = datetime(2026, 4, 19, 10, 0, 0, tzinfo=timezone.utc)
+        platform_config = TenantProvisionPlatformConfig(
+            image_tag="openclaw/lobster:1.4.2-alpine",
+            service_port=3000,
+            openai_api_base="https://api.openai.com/v1",
+            openai_api_key="platform-openai-key",
+            log_level="INFO",
+        )
+        registry = FakeTenantRegistryGateway(tenant_id="tenant-0001")
+        runtime = FakeTenantRuntimeGateway()
+        traefik = FakeTraefikGateway()
+        key_provider = FakeLiteLLMTenantKeyProvider()
+        wallet_gateway = FakeUserWalletGateway()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = TenantProvisionService(
+                project_root=Path(tmpdir),
+                platform_config=platform_config,
+                tenant_registry_gateway=registry,
+                tenant_runtime_gateway=runtime,
+                traefik_gateway=traefik,
+                tenant_key_provider=key_provider,
+                user_wallet_gateway=wallet_gateway,
+                litellm_topup_fx_rates_to_usd={"USD": "1", "CNY": "0.138"},
+                litellm_topup_sync_state_file=Path(tmpdir) / "litellm-topup-sync-state.json",
+                logger=logging.getLogger("test"),
+            )
+            service.provision(
+                request=TenantProvisionRequest(
+                    tenant_name="Acme Corp",
+                    channel_type="feishu",
+                    channel_config={
+                        "FEISHU_APP_ID": "app-id",
+                        "FEISHU_APP_SECRET": "app-secret",
+                        "FEISHU_VERIFICATION_TOKEN": "verify-token",
+                    },
+                    requested_at=requested_at,
+                )
+            )
+
+            result = service.topup_user_wallet(
+                request=UserWalletMutationRequest(
+                    tenant_id="tenant-0001",
+                    user_id="user-001",
+                    amount="100",
+                    currency="CNY",
+                    source="manual_topup",
+                    source_ref="topup-1",
+                    request_id="req-topup-1",
+                    idempotency_key="idem-topup-1",
+                    metadata={},
+                    requested_at=requested_at,
+                )
+            )
+
+        self.assertEqual(result.currency, "USD")
+        assert wallet_gateway.last_topup_call is not None
+        self.assertEqual(wallet_gateway.last_topup_call["amount"], "13.800000")
+        self.assertEqual(wallet_gateway.last_topup_call["currency"], "USD")
+        self.assertEqual(len(key_provider.synced_calls), 1)
+        self.assertEqual(key_provider.synced_calls[0]["budget_delta_usd"], "13.800000")
 
 
 if __name__ == "__main__":

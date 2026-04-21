@@ -3,15 +3,18 @@ import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
 
 from clawos_cli.application.backup_service import BackupService
 from clawos_cli.application.dto import BackupRequest, RestoreRequest
+from clawos_cli.application.litellm_auto_charge_worker import LiteLLMAutoChargeConfig, LiteLLMAutoChargeWorker
 from clawos_cli.application.restore_service import RestoreService
 from clawos_cli.application.tenant_provision_dto import TenantProvisionPlatformConfig
 from clawos_cli.application.tenant_provision_service import TenantProvisionService
 from clawos_cli.domain.error_codes import ErrorCode
 from clawos_cli.domain.exceptions import ClawOSError
 from clawos_cli.infrastructure.filesystem_gateway import LocalFilesystemGateway
+from clawos_cli.infrastructure.litellm_spend_gateway import HttpLiteLLMSpendGateway
 from clawos_cli.infrastructure.postgres_gateway import SkeletonPostgresGateway
 from clawos_cli.infrastructure.tenant_key_provider import LiteLLMTenantKeyProvider, SkeletonTenantKeyProvider
 from clawos_cli.infrastructure.tenant_registry_gateway import JsonTenantRegistryGateway
@@ -52,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_serve_parser.add_argument("--litellm-master-key")
     control_plane_serve_parser.add_argument("--litellm-model-name")
     control_plane_serve_parser.add_argument("--litellm-timeout-seconds", type=float)
+    control_plane_serve_parser.add_argument("--litellm-topup-fx-rates")
+    control_plane_serve_parser.add_argument("--litellm-topup-sync-state-file")
+    control_plane_serve_parser.add_argument("--litellm-auto-charge-enabled", required=True, choices=("true", "false"))
+    control_plane_serve_parser.add_argument("--litellm-auto-charge-poll-interval-seconds", type=float)
+    control_plane_serve_parser.add_argument("--litellm-auto-charge-state-file")
     return parser
 
 
@@ -138,12 +146,23 @@ def handle_control_plane_serve(args: argparse.Namespace, logger: logging.Logger)
                 code=ErrorCode.PLATFORM_CONFIG_MISSING,
                 message="litellm-model-name and litellm-timeout-seconds are required for litellm provider",
             )
+        if args.litellm_topup_fx_rates is None or args.litellm_topup_sync_state_file is None:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message="litellm-topup-fx-rates and litellm-topup-sync-state-file are required for litellm provider",
+            )
         tenant_key_provider = LiteLLMTenantKeyProvider(
             base_url=args.litellm_base_url,
             master_key=args.litellm_master_key,
             model_name=args.litellm_model_name,
             request_timeout_seconds=args.litellm_timeout_seconds,
         )
+    topup_fx_rates = _parse_topup_fx_rates(raw=args.litellm_topup_fx_rates)
+    topup_sync_state_file = Path(
+        args.litellm_topup_sync_state_file
+        if args.litellm_topup_sync_state_file is not None
+        else project_root / ".tmp" / "control-plane" / "litellm-topup-sync-state.json"
+    )
     tenant_provision_service = TenantProvisionService(
         project_root=project_root,
         platform_config=platform_config,
@@ -152,8 +171,47 @@ def handle_control_plane_serve(args: argparse.Namespace, logger: logging.Logger)
         traefik_gateway=traefik_gateway,
         tenant_key_provider=tenant_key_provider,
         user_wallet_gateway=user_wallet_gateway,
+        litellm_topup_fx_rates_to_usd=topup_fx_rates,
+        litellm_topup_sync_state_file=topup_sync_state_file,
         logger=logger,
     )
+    auto_charge_enabled = args.litellm_auto_charge_enabled == "true"
+    if auto_charge_enabled:
+        if args.litellm_base_url is None or args.litellm_master_key is None:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message="litellm-base-url and litellm-master-key are required when auto charge is enabled",
+            )
+        if args.litellm_timeout_seconds is None:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message="litellm-timeout-seconds is required when auto charge is enabled",
+            )
+        if (
+            args.litellm_auto_charge_poll_interval_seconds is None
+            or args.litellm_auto_charge_state_file is None
+        ):
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message=(
+                    "litellm-auto-charge-poll-interval-seconds and "
+                    "litellm-auto-charge-state-file are required when auto charge is enabled"
+                ),
+            )
+        auto_charge_worker = LiteLLMAutoChargeWorker(
+            spend_gateway=HttpLiteLLMSpendGateway(
+                base_url=args.litellm_base_url,
+                master_key=args.litellm_master_key,
+                request_timeout_seconds=args.litellm_timeout_seconds,
+            ),
+            tenant_provision_service=tenant_provision_service,
+            config=LiteLLMAutoChargeConfig(
+                poll_interval_seconds=args.litellm_auto_charge_poll_interval_seconds,
+                state_file=Path(args.litellm_auto_charge_state_file),
+            ),
+            logger=logger,
+        )
+        auto_charge_worker.start()
     serve_tenant_control_plane(
         host=args.host,
         port=args.port,
@@ -180,6 +238,43 @@ def main() -> int:
     except ClawOSError as exc:
         print(exc.to_user_message(), file=sys.stderr)
         return 1
+
+
+def _parse_topup_fx_rates(raw: str | None) -> dict[str, str]:
+    if raw is None:
+        return {}
+    parsed: dict[str, str] = {}
+    for entry in raw.split(","):
+        candidate = entry.strip()
+        if candidate == "":
+            continue
+        if ":" not in candidate:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message=f"invalid litellm-topup-fx-rates item (expect CURRENCY:RATE): {candidate}",
+            )
+        currency, rate = candidate.split(":", 1)
+        currency_normalized = currency.strip().upper()
+        rate_normalized = rate.strip()
+        if currency_normalized == "" or rate_normalized == "":
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message=f"invalid litellm-topup-fx-rates item (empty field): {candidate}",
+            )
+        try:
+            rate_decimal = Decimal(rate_normalized)
+        except InvalidOperation as exc:
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message=f"invalid fx rate for currency={currency_normalized}: {rate_normalized}",
+            ) from exc
+        if rate_decimal <= Decimal("0"):
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message=f"fx rate must be positive for currency={currency_normalized}: {rate_normalized}",
+            )
+        parsed[currency_normalized] = format(rate_decimal, "f")
+    return parsed
 
 
 if __name__ == "__main__":

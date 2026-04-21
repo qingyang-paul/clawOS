@@ -73,7 +73,7 @@ control-plane-up:
 		CONTROL_PLANE_HOST CONTROL_PLANE_PORT PROJECT_ROOT REGISTRY_FILE WALLET_FILE \
 		TRAEFIK_DASHBOARD_API_URL TRAEFIK_MAX_WAIT_SECONDS TRAEFIK_POLL_INTERVAL_SECONDS \
 		PLATFORM_IMAGE_TAG PLATFORM_SERVICE_PORT PLATFORM_OPENAI_API_BASE PLATFORM_OPENAI_API_KEY PLATFORM_LOG_LEVEL \
-		TENANT_KEY_PROVIDER; do \
+		TENANT_KEY_PROVIDER LITELLM_AUTO_CHARGE_ENABLED; do \
 		eval "value=\$${$$key}"; \
 		if [[ -z "$$value" ]]; then \
 			echo "missing required env key: $$key"; \
@@ -89,7 +89,7 @@ control-plane-up:
 			fi; \
 		done; \
 	elif [[ "$$TENANT_KEY_PROVIDER" == "litellm" ]]; then \
-		for key in LITELLM_BASE_URL LITELLM_MASTER_KEY LITELLM_MODEL_NAME LITELLM_TIMEOUT_SECONDS; do \
+		for key in LITELLM_BASE_URL LITELLM_MASTER_KEY LITELLM_MODEL_NAME LITELLM_TIMEOUT_SECONDS LITELLM_TOPUP_FX_RATES LITELLM_TOPUP_SYNC_STATE_FILE; do \
 			eval "value=\$${$$key}"; \
 			if [[ -z "$$value" ]]; then \
 				echo "missing required env key for litellm provider: $$key"; \
@@ -99,6 +99,19 @@ control-plane-up:
 	else \
 		echo "invalid TENANT_KEY_PROVIDER=$$TENANT_KEY_PROVIDER (allowed: skeleton, litellm)"; \
 		exit 1; \
+	fi; \
+	if [[ "$$LITELLM_AUTO_CHARGE_ENABLED" != "true" && "$$LITELLM_AUTO_CHARGE_ENABLED" != "false" ]]; then \
+		echo "invalid LITELLM_AUTO_CHARGE_ENABLED=$$LITELLM_AUTO_CHARGE_ENABLED (allowed: true, false)"; \
+		exit 1; \
+	fi; \
+	if [[ "$$LITELLM_AUTO_CHARGE_ENABLED" == "true" ]]; then \
+		for key in LITELLM_BASE_URL LITELLM_MASTER_KEY LITELLM_TIMEOUT_SECONDS LITELLM_AUTO_CHARGE_POLL_INTERVAL_SECONDS LITELLM_AUTO_CHARGE_STATE_FILE; do \
+			eval "value=\$${$$key}"; \
+			if [[ -z "$$value" ]]; then \
+				echo "missing required env key for auto charge: $$key"; \
+				exit 1; \
+			fi; \
+		done; \
 	fi; \
 	if [[ "$$CONTROL_PLANE_HOST" != "127.0.0.1" ]]; then \
 		echo "CONTROL_PLANE_HOST must be 127.0.0.1 to keep control plane hidden behind Traefik"; \
@@ -132,6 +145,11 @@ control-plane-up:
 		$${LITELLM_MASTER_KEY:+--litellm-master-key "$$LITELLM_MASTER_KEY"} \
 		$${LITELLM_MODEL_NAME:+--litellm-model-name "$$LITELLM_MODEL_NAME"} \
 		$${LITELLM_TIMEOUT_SECONDS:+--litellm-timeout-seconds "$$LITELLM_TIMEOUT_SECONDS"} \
+		$${LITELLM_TOPUP_FX_RATES:+--litellm-topup-fx-rates "$$LITELLM_TOPUP_FX_RATES"} \
+		$${LITELLM_TOPUP_SYNC_STATE_FILE:+--litellm-topup-sync-state-file "$$LITELLM_TOPUP_SYNC_STATE_FILE"} \
+		--litellm-auto-charge-enabled "$$LITELLM_AUTO_CHARGE_ENABLED" \
+		$${LITELLM_AUTO_CHARGE_POLL_INTERVAL_SECONDS:+--litellm-auto-charge-poll-interval-seconds "$$LITELLM_AUTO_CHARGE_POLL_INTERVAL_SECONDS"} \
+		$${LITELLM_AUTO_CHARGE_STATE_FILE:+--litellm-auto-charge-state-file "$$LITELLM_AUTO_CHARGE_STATE_FILE"} \
 		>"$$PROJECT_ROOT/$(CONTROL_PLANE_LOG_FILE)" 2>&1 & echo $$! >"$$PROJECT_ROOT/$(CONTROL_PLANE_PID_FILE)"; \
 	echo "control-plane started: pid=$$(cat "$$PROJECT_ROOT/$(CONTROL_PLANE_PID_FILE)") log=$$PROJECT_ROOT/$(CONTROL_PLANE_LOG_FILE)"
 

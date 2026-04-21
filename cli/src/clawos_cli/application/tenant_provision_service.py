@@ -1,5 +1,8 @@
 import logging
+import json
 from pathlib import Path
+import threading
+from decimal import Decimal, InvalidOperation
 
 from clawos_cli.application.tenant_provision_dto import (
     TenantDeleteRequest,
@@ -39,6 +42,8 @@ class TenantProvisionService:
         traefik_gateway: TraefikGateway,
         tenant_key_provider: TenantKeyProvider,
         user_wallet_gateway: UserWalletGateway,
+        litellm_topup_fx_rates_to_usd: dict[str, str],
+        litellm_topup_sync_state_file: Path,
         logger: logging.Logger,
     ) -> None:
         self._project_root = project_root
@@ -48,6 +53,14 @@ class TenantProvisionService:
         self._traefik_gateway = traefik_gateway
         self._tenant_key_provider = tenant_key_provider
         self._user_wallet_gateway = user_wallet_gateway
+        self._litellm_topup_fx_rates_to_usd = {
+            key.upper(): value for key, value in litellm_topup_fx_rates_to_usd.items()
+        }
+        self._litellm_topup_sync_state_file = litellm_topup_sync_state_file
+        self._litellm_topup_sync_state_lock = threading.Lock()
+        self._litellm_topup_sync_state_file.parent.mkdir(parents=True, exist_ok=True)
+        if not self._litellm_topup_sync_state_file.exists():
+            self._write_litellm_topup_sync_state(payload={"applied_topup_idempotency_keys": []})
         self._logger = logger
 
     def provision(self, request: TenantProvisionRequest) -> TenantProvisionResult:
@@ -219,19 +232,36 @@ class TenantProvisionService:
     def topup_user_wallet(self, request: UserWalletMutationRequest) -> UserWalletMutationResult:
         tenant = self._tenant_registry_gateway.get_tenant(tenant_id=request.tenant_id)
         self._validate_tenant_wallet_mutation_status(tenant_status=tenant.status, tenant_id=tenant.tenant_id)
+        wallet_amount = request.amount
+        wallet_currency = request.currency
+        wallet_metadata = dict(request.metadata)
+        if self._tenant_key_provider.provider_name() == "litellm":
+            converted = self._convert_topup_to_usd(amount=request.amount, source_currency=request.currency)
+            wallet_amount = converted["amount_usd"]
+            wallet_currency = "USD"
+            wallet_metadata["topup_input_amount"] = request.amount
+            wallet_metadata["topup_input_currency"] = request.currency.upper()
+            wallet_metadata["topup_fx_rate_to_usd"] = converted["fx_rate_to_usd"]
+
         ledger = self._user_wallet_gateway.topup(
             tenant_id=request.tenant_id,
             user_id=request.user_id,
-            amount=request.amount,
-            currency=request.currency,
+            amount=wallet_amount,
+            currency=wallet_currency,
             source=request.source,
             source_ref=request.source_ref,
             request_id=request.request_id,
             idempotency_key=request.idempotency_key,
-            metadata=request.metadata,
+            metadata=wallet_metadata,
             occurred_at=request.requested_at,
             created_at=request.requested_at,
         )
+        if self._tenant_key_provider.provider_name() == "litellm":
+            self._sync_litellm_budget_from_topup(
+                tenant_id=request.tenant_id,
+                idempotency_key=request.idempotency_key,
+                budget_delta_usd=wallet_amount,
+            )
         self._logger.info(
             "wallet_topup tenant_id=%s user_id=%s delta=%s balance_after=%s idempotent_replay=%s",
             ledger.tenant_id,
@@ -331,4 +361,84 @@ class TenantProvisionService:
                     "wallet operation is blocked for tenant status "
                     f"tenant_id={tenant_id} status={tenant_status}"
                 ),
+            )
+
+    def _convert_topup_to_usd(self, amount: str, source_currency: str) -> dict[str, str]:
+        source_currency_upper = source_currency.upper()
+        rate_raw = self._litellm_topup_fx_rates_to_usd.get(source_currency_upper)
+        if rate_raw is None:
+            raise ClawOSError(
+                code=ErrorCode.TOPUP_EXCHANGE_RATE_MISSING,
+                message=f"missing exchange rate for currency={source_currency_upper}",
+            )
+        try:
+            rate = Decimal(rate_raw)
+            amount_decimal = Decimal(amount)
+        except InvalidOperation as exc:
+            raise ClawOSError(
+                code=ErrorCode.WALLET_REQUEST_INVALID,
+                message=(
+                    "invalid topup amount or fx rate "
+                    f"amount={amount} fx_rate_to_usd={rate_raw} currency={source_currency_upper}"
+                ),
+            ) from exc
+        if amount_decimal <= Decimal("0") or rate <= Decimal("0"):
+            raise ClawOSError(
+                code=ErrorCode.WALLET_REQUEST_INVALID,
+                message=(
+                    "topup amount and fx rate must be positive "
+                    f"amount={amount_decimal} fx_rate_to_usd={rate} currency={source_currency_upper}"
+                ),
+            )
+        amount_usd = (amount_decimal * rate).quantize(Decimal("0.000001"))
+        return {
+            "amount_usd": format(amount_usd, "f"),
+            "fx_rate_to_usd": format(rate.quantize(Decimal("0.000001")), "f"),
+        }
+
+    def _sync_litellm_budget_from_topup(
+        self,
+        tenant_id: str,
+        idempotency_key: str,
+        budget_delta_usd: str,
+    ) -> None:
+        sync_state = self._read_litellm_topup_sync_state()
+        applied = set(sync_state["applied_topup_idempotency_keys"])
+        if idempotency_key in applied:
+            return
+
+        tenants_root = self._project_root / "tenants"
+        runtime_env = self._tenant_runtime_gateway.read_tenant_env(
+            tenants_root=tenants_root,
+            tenant_id=tenant_id,
+        )
+        tenant_openai_api_key = runtime_env.get("OPENAI_API_KEY", "").strip()
+        if tenant_openai_api_key == "":
+            raise ClawOSError(
+                code=ErrorCode.PLATFORM_CONFIG_MISSING,
+                message=f"tenant openai api key not found in tenant runtime env tenant_id={tenant_id}",
+            )
+        self._tenant_key_provider.sync_topup_budget_usd(
+            tenant_id=tenant_id,
+            api_key=tenant_openai_api_key,
+            budget_delta_usd=budget_delta_usd,
+        )
+        applied.add(idempotency_key)
+        self._write_litellm_topup_sync_state(
+            payload={"applied_topup_idempotency_keys": sorted(applied)}
+        )
+
+    def _read_litellm_topup_sync_state(self) -> dict[str, list[str]]:
+        with self._litellm_topup_sync_state_lock:
+            raw = json.loads(self._litellm_topup_sync_state_file.read_text(encoding="utf-8"))
+        keys = raw.get("applied_topup_idempotency_keys")
+        if isinstance(keys, list):
+            return {"applied_topup_idempotency_keys": [str(item) for item in keys]}
+        return {"applied_topup_idempotency_keys": []}
+
+    def _write_litellm_topup_sync_state(self, payload: dict[str, list[str]]) -> None:
+        with self._litellm_topup_sync_state_lock:
+            self._litellm_topup_sync_state_file.write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8",
             )

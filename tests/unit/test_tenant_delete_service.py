@@ -60,12 +60,20 @@ class FakeTenantKeyProvider(TenantKeyProvider):
     def __init__(self) -> None:
         self.revoked_key: str | None = None
 
+    def provider_name(self) -> str:
+        return "skeleton"
+
     def issue_openai_api_key(self, tenant_id: str) -> str:
         return f"vk-{tenant_id}"
 
     def revoke_openai_api_key(self, tenant_id: str, api_key: str) -> None:
         _ = tenant_id
         self.revoked_key = api_key
+
+    def sync_topup_budget_usd(self, tenant_id: str, api_key: str, budget_delta_usd: str) -> None:
+        _ = tenant_id
+        _ = api_key
+        _ = budget_delta_usd
 
 
 class FakeUserWalletGateway(UserWalletGateway):
@@ -167,6 +175,8 @@ class TenantDeleteServiceTest(unittest.TestCase):
                 traefik_gateway=traefik_gateway,
                 tenant_key_provider=key_provider,
                 user_wallet_gateway=FakeUserWalletGateway(),
+                litellm_topup_fx_rates_to_usd={},
+                litellm_topup_sync_state_file=project_root / "litellm-topup-sync-state.json",
                 logger=logging.getLogger("test"),
             )
 

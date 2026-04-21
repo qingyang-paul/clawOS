@@ -7,6 +7,7 @@ Verify:
 1. different tenants hold different LiteLLM virtual keys
 2. requests from tenant keys are forwarded through one LiteLLM relay
 3. records can be queried separately (`/key/info`, `/spend/logs`)
+4. control-plane can auto-charge user wallet from LiteLLM spend logs (no manual wallet-charge call)
 
 ## Commands
 
@@ -47,6 +48,12 @@ Note:
 
 - LiteLLM `main-v1.35.0` may return 500 on `/spend/logs` for some setups.
 - In that case, verification still passes using key-level isolation (`/key/info`) and successful per-key requests.
+
+For auto-charge integration:
+
+- set `LITELLM_AUTO_CHARGE_ENABLED=true` in `.tmp/control-plane.env`
+- set `LITELLM_TOPUP_FX_RATES` and `LITELLM_TOPUP_SYNC_STATE_FILE` for budget sync on topup
+- ensure requests carry `user`/`user_id` so spend logs can map to `user_balance` dimension
 
 Inspect runtime logs:
 

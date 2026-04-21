@@ -76,10 +76,20 @@ Delete flow:
 
 Wallet flow:
 
-1. Topup endpoint increments `user_balance`.
-2. Charge endpoint checks balance, blocks if insufficient, and deducts on success.
-3. Every topup/charge writes one append-only `user_ledger` row.
-4. `(tenant_id, user_id, idempotency_key)` is used for idempotent replay.
+1. For `TENANT_KEY_PROVIDER=litellm`, topup amount is converted to `USD` via configured FX rates before writing wallet.
+2. Converted USD amount increments `user_balance`.
+3. The same USD delta is synced to LiteLLM key budget.
+4. Charge endpoint checks balance, blocks if insufficient, and deducts on success.
+5. Every topup/charge writes one append-only `user_ledger` row.
+6. `(tenant_id, user_id, idempotency_key)` is used for idempotent replay.
+
+LiteLLM auto-charge flow:
+
+1. control-plane background worker polls LiteLLM `/spend/logs`.
+2. each spend log is normalized to one `wallet/charge` request (`source=litellm_pull`).
+3. idempotency key is generated as `litellm:{request_id}` to avoid double charge.
+4. processed keys are persisted in a local state file for restart-safe dedup.
+5. log must contain `tenant_id` and `user_id` metadata, otherwise charge is skipped.
 
 ## Data Model
 
@@ -164,7 +174,8 @@ uv run clawos control-plane serve \
   --platform-log-level INFO \
   --tenant-key-provider skeleton \
   --tenant-key-prefix vk_tenant_ \
-  --tenant-key-entropy-bytes 24
+  --tenant-key-entropy-bytes 24 \
+  --litellm-auto-charge-enabled false
 ```
 
 Health check:
@@ -241,6 +252,22 @@ make wallet-charge \
 
 make wallet-balance TENANT_ID=tenant-0001 USER_ID=user-001
 ```
+
+LiteLLM automatic charge verification (no manual `wallet-charge`):
+
+1. set `TENANT_KEY_PROVIDER=litellm`
+2. set `LITELLM_AUTO_CHARGE_ENABLED=true`
+3. fill:
+   - `LITELLM_BASE_URL`
+   - `LITELLM_MASTER_KEY`
+   - `LITELLM_TOPUP_FX_RATES` (for example `USD:1,CNY:0.138000`)
+   - `LITELLM_TOPUP_SYNC_STATE_FILE`
+   - `LITELLM_TIMEOUT_SECONDS`
+   - `LITELLM_AUTO_CHARGE_POLL_INTERVAL_SECONDS`
+   - `LITELLM_AUTO_CHARGE_STATE_FILE`
+4. restart control plane: `make control-plane-down && make control-plane-up`
+5. send tenant request through LiteLLM virtual key path
+6. check `wallet-balance` and `control-plane-logs` for auto charge records
 
 Delete tenant and release runtime resources:
 
