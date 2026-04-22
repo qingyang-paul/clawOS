@@ -13,7 +13,7 @@ LITELLM_VERIFY_BASE_URL ?= http://127.0.0.1:4000
 LITELLM_VERIFY_TENANT_A ?= tenant-verify-a
 LITELLM_VERIFY_TENANT_B ?= tenant-verify-b
 
-.PHONY: traefik-up traefik-down traefik-restart traefik-status traefik-logs traefik-routes litellm-verify-up litellm-verify-down litellm-verify-status litellm-verify-logs litellm-verify-run control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-delete tenant-verify wallet-topup wallet-charge wallet-balance
+.PHONY: traefik-up traefik-down traefik-restart traefik-status traefik-logs traefik-routes litellm-verify-up litellm-verify-down litellm-verify-status litellm-verify-logs litellm-verify-run control-plane-up control-plane-down control-plane-status control-plane-logs tenant-create-feishu tenant-delete tenant-verify wallet-topup wallet-charge wallet-balance test-unit test-integration test-all stack-up stack-down stack-restart stack-status
 
 traefik-up:
 	@mkdir -p "$(TRAEFIK_LOG_DIR)"
@@ -215,3 +215,44 @@ tenant-verify:
 		exit 1; \
 	fi; \
 	head -n 20 .tmp/control-plane/tenant-route.out
+
+test-unit:
+	@PYTHONPATH=cli/src uv run --project cli python -m unittest discover -s tests/unit -p 'test_*.py' -v
+
+test-integration:
+	@PYTHONPATH=cli/src uv run --project cli python -m unittest discover -s tests/integration -p 'test_*.py' -v
+
+test-all: test-unit test-integration
+
+stack-up:
+	@test -f "$(CONTROL_PLANE_ENV_FILE)" || (echo "missing env file: $(CONTROL_PLANE_ENV_FILE)"; exit 1)
+	@set -a; source "$(CONTROL_PLANE_ENV_FILE)"; set +a; \
+	master_key="$${LITELLM_MASTER_KEY:-}"; \
+	if [[ -z "$$master_key" ]]; then \
+		echo "missing LITELLM_MASTER_KEY in $(CONTROL_PLANE_ENV_FILE)"; \
+		exit 1; \
+	fi; \
+	$(MAKE) traefik-up; \
+	LITELLM_MASTER_KEY="$$master_key" $(MAKE) litellm-verify-up; \
+	CONTROL_PLANE_ENV_FILE="$(CONTROL_PLANE_ENV_FILE)" $(MAKE) control-plane-up; \
+	echo "all services are up (traefik + litellm + control-plane)"
+
+stack-down:
+	-@$(MAKE) control-plane-down
+	-@$(MAKE) litellm-verify-down
+	-@$(MAKE) traefik-down
+	@echo "all services are down"
+
+stack-restart:
+	@$(MAKE) stack-down
+	@$(MAKE) stack-up
+
+stack-status:
+	@echo "[traefik]"
+	@$(MAKE) traefik-status
+	@echo ""
+	@echo "[litellm verify]"
+	@$(MAKE) litellm-verify-status
+	@echo ""
+	@echo "[control-plane]"
+	@$(MAKE) control-plane-status
