@@ -46,8 +46,8 @@ Expected output includes:
 
 Note:
 
-- LiteLLM `main-v1.35.0` may return 500 on `/spend/logs` for some setups.
-- In that case, verification still passes using key-level isolation (`/key/info`) and successful per-key requests.
+- Verification stack pins `ghcr.io/berriai/litellm:v1.83.3-stable` to avoid known `/spend/logs` 500 issues observed on older `main-v1.35.0`.
+- If `/spend/logs` still returns non-200, collect container logs with `make litellm-verify-logs` and fail the auto-charge test.
 
 For auto-charge integration:
 

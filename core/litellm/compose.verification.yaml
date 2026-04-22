@@ -2,7 +2,7 @@ name: clawos-litellm-verify
 
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:main-v1.35.0
+    image: ghcr.io/berriai/litellm:v1.83.3-stable
     container_name: clawos-litellm-verify
     restart: unless-stopped
     command:
